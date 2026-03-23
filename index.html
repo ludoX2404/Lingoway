@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src *; script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline'; img-src * data:; connect-src *;">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>LingoWay</title>
 <style>
@@ -466,10 +467,60 @@ input[type=range].rng::-webkit-slider-thumb{-webkit-appearance:none;width:22px;h
 <div class="toast" id="toast"></div>
 <div class="modal-bd" id="modal" onclick="if(event.target===this)closeModal()"><div class="modal-box"><button class="modal-x" onclick="closeModal()">✕</button><div class="modal-av" id="m-av"></div><div class="modal-name" id="m-name"></div><div class="modal-sub" id="m-sub"></div><div id="m-info"></div><div class="modal-acts"><button class="m-bp" onclick="doConnect()">Envoyer une demande</button><button class="m-bs" onclick="closeModal()">Fermer</button></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 var SUPA_URL = 'https://sxeoaitdvzwscmmurxbw.supabase.co';
 var SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4ZW9haXRkdnp3c2NtbXVyeGJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxODM4MDUsImV4cCI6MjA4OTc1OTgwNX0.FRejlTPEHQ6Z7yHDX_rMIXwo9hHUceLW0CnJ_19taRg';
-var sb = (typeof supabase !== 'undefined') ? supabase.createClient(SUPA_URL, SUPA_KEY) : null;
+var sb = null;
+var supabaseReady = false;
+var supabaseError = null;
+
+// Attendre que Supabase soit chargé
+function initSupabase(){
+  console.log('[DEBUG] Tentative d\'initialiser Supabase...');
+  console.log('[DEBUG] typeof supabase:', typeof supabase);
+  console.log('[DEBUG] window.supabase:', typeof window.supabase);
+  
+  if(typeof supabase !== 'undefined' && supabase && supabase.createClient){
+    try{
+      sb = supabase.createClient(SUPA_URL, SUPA_KEY);
+      supabaseReady = true;
+      console.log('✓ Supabase connecté avec succès');
+      console.log('[DEBUG] Client Supabase:', sb);
+    }catch(e){
+      supabaseError = e;
+      console.error('✗ Erreur création client Supabase:', e);
+    }
+  }else{
+    if(window.supabaseInitTries === undefined) window.supabaseInitTries = 0;
+    window.supabaseInitTries++;
+    if(window.supabaseInitTries > 100){
+      console.error('✗ La CDN Supabase ne s\'est pas chargée après 10 secondes');
+      supabaseError = 'CDN Supabase timeout';
+      return;
+    }
+    setTimeout(initSupabase, 100);
+  }
+}
+initSupabase();
+
+// Attendre que Supabase soit prêt
+async function waitForSupabase(){
+  let attempts = 0;
+  while(!supabaseReady && !supabaseError && attempts < 200){
+    await new Promise(r => setTimeout(r, 50));
+    attempts++;
+  }
+  if(supabaseError){
+    console.error('Erreur Supabase:', supabaseError);
+    throw new Error('Supabase non disponible: ' + supabaseError);
+  }
+  if(!supabaseReady){
+    console.error('Timeout: Supabase ne s\'est pas initialisé');
+    throw new Error('Timeout: Supabase ne s\'est pas initialisé');
+  }
+  return sb;
+}
 
 /* ═══════════════════════════════════
    LINGOWAY — Full App JS
@@ -563,17 +614,14 @@ async function submitLogin(){
   var em=$id('l-em').value.trim();var pw=$id('l-pw').value;
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){$id('lf-em').classList.add('err');return;}
   if(!pw){$id('lf-pw').classList.add('err');return;}
-  if(!sb){
-    /* Fallback sans Supabase */
-    var saved=LS.g('profile');
-    if(saved&&saved.fn){Object.assign(U,saved);}
-    else{U.fn=em.split('@')[0];U.email=em;U.level='B1';U.levelName='Intermédiaire';U.score=68;U.certName='TOEFL iBT';U.certShort='TOEFL';U.motivName='la carrière';U.dailyTime=30;U.weakNames=['le conditionnel','la voix passive'];U.skillScores={Grammaire:68,Vocabulaire:55,Compréhension:62,Expression:50,Lecture:74,Écriture:44};U.targetName='anglais';U.streak=5;U.wordsLearned=120;}
-    U.weekPlan=buildWeekPlan();launchApp();return;
-  }
+  
   var btn=document.querySelector('#s-login .bform');
   if(btn){btn.textContent='Connexion...';btn.disabled=true;}
+  
   try{
-    var res=await sb.auth.signInWithPassword({email:em,password:pw});
+    // Attendre que Supabase soit prêt
+    const client = await waitForSupabase();
+    var res=await client.auth.signInWithPassword({email:em,password:pw});
     if(res.error){
       if(btn){btn.textContent='Se connecter →';btn.disabled=false;}
       $id('lf-pw').classList.add('err');
@@ -585,6 +633,7 @@ async function submitLogin(){
   }catch(e){
     if(btn){btn.textContent='Se connecter →';btn.disabled=false;}
     toast('Erreur de connexion. Réessayez.');
+    console.error(e);
   }
 }
 function loginDemo(){
@@ -621,21 +670,23 @@ async function submitSignup(){
   if(!ok)return;
   U.fn=fn;U.ln=ln;U.email=em;
   U.native=$id('i-native').value;U.target=$id('i-target').value;U.age=parseInt($id('i-age').value)||0;
-  if(sb){
-    var btn=document.querySelector('#s-signup .bform');
-    if(btn){btn.textContent='Création...';btn.disabled=true;}
-    try{
-      var res=await sb.auth.signUp({email:em,password:pw});
-      if(btn){btn.textContent='Continuer →';btn.disabled=false;}
-      if(res.error){toast('Erreur : '+res.error.message);return;}
-      if(res.data&&res.data.user){
-        U.userId=res.data.user.id;
-        await sb.from('profiles').update({first_name:fn,last_name:ln,target_lang:U.target,native_lang:U.native}).eq('id',res.data.user.id);
-      }
-    }catch(e){
-      if(btn){btn.textContent='Continuer →';btn.disabled=false;}
-      toast('Erreur de connexion. Vérifiez votre clé Supabase.');
+  
+  var btn=document.querySelector('#s-signup .bform');
+  if(btn){btn.textContent='Création...';btn.disabled=true;}
+  try{
+    // Attendre que Supabase soit prêt
+    const client = await waitForSupabase();
+    var res=await client.auth.signUp({email:em,password:pw});
+    if(btn){btn.textContent='Continuer →';btn.disabled=false;}
+    if(res.error){toast('Erreur : '+res.error.message);return;}
+    if(res.data&&res.data.user){
+      U.userId=res.data.user.id;
+      await client.from('profiles').update({first_name:fn,last_name:ln,target_lang:U.target,native_lang:U.native}).eq('id',res.data.user.id);
     }
+  }catch(e){
+    if(btn){btn.textContent='Continuer →';btn.disabled=false;}
+    toast('Erreur de création. Réessayez.');
+    console.error(e);
   }
   buildTestSteps();tStep=0;tElapsed=0;gramAnswered={};
   clearInterval(tTimer);
@@ -1644,9 +1695,9 @@ function doConnect(){if(curModal){sentReqs[curModal.id]=true;buildNearby();}clos
 ═══════════════════════════════════ */
 
 async function loadUserProfile(userId){
-  if(!sb)return;
   try{
-    var res=await sb.from('profiles').select('*').eq('id',userId).single();
+    const client = await waitForSupabase();
+    var res=await client.from('profiles').select('*').eq('id',userId).single();
     if(res.data){
       var d=res.data;
       U.fn=d.first_name||'';U.ln=d.last_name||'';U.email=d.email||'';
@@ -1663,9 +1714,10 @@ async function loadUserProfile(userId){
 }
 
 async function saveUserProfile(){
-  if(!U.userId||!sb)return;
+  if(!U.userId)return;
   try{
-    await sb.from('profiles').update({
+    const client = await waitForSupabase();
+    await client.from('profiles').update({
       level:U.level,level_name:U.levelName,score:U.score,
       cert_name:U.certName,daily_time:U.dailyTime,
       weak_names:U.weakNames,skill_scores:U.skillScores,
@@ -1676,9 +1728,9 @@ async function saveUserProfile(){
 }
 
 async function checkSession(){
-  if(!sb){buildLanding();return;}
   try{
-    var res=await sb.auth.getSession();
+    const client = await waitForSupabase();
+    var res=await client.auth.getSession();
     if(res.data&&res.data.session){
       await loadUserProfile(res.data.session.user.id);
       U.weekPlan=buildWeekPlan();
@@ -1696,7 +1748,10 @@ async function checkSession(){
 }
 
 async function logOut(){
-  if(sb){try{await sb.auth.signOut();}catch(e){}}
+  try{
+    const client = await waitForSupabase();
+    try{await client.auth.signOut();}catch(e){}
+  }catch(e){}
   LS.d('profile');
   U={fn:'',ln:'',email:'',target:'en',native:'fr',level:'B1',levelName:'Intermédiaire',score:0,
     certName:'TOEFL iBT',certShort:'TOEFL',dailyTime:30,weakNames:[],
