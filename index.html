@@ -466,7 +466,12 @@ input[type=range].rng::-webkit-slider-thumb{-webkit-appearance:none;width:22px;h
 <div class="toast" id="toast"></div>
 <div class="modal-bd" id="modal" onclick="if(event.target===this)closeModal()"><div class="modal-box"><button class="modal-x" onclick="closeModal()">✕</button><div class="modal-av" id="m-av"></div><div class="modal-name" id="m-name"></div><div class="modal-sub" id="m-sub"></div><div id="m-info"></div><div class="modal-acts"><button class="m-bp" onclick="doConnect()">Envoyer une demande</button><button class="m-bs" onclick="closeModal()">Fermer</button></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script>/* ═══════════════════════════════════
+<script>
+var SUPA_URL = 'https://sxeoaitdvzwscmmurxbw.supabase.co';
+var SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4ZW9haXRkdnp3c2NtbXVyeGJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxODM4MDUsImV4cCI6MjA4OTc1OTgwNX0.FRejlTPEHQ6Z7yHDX_rMIXwo9hHUceLW0CnJ_19taRg';
+var sb = (typeof supabase !== 'undefined') ? supabase.createClient(SUPA_URL, SUPA_KEY) : null;
+
+/* ═══════════════════════════════════
    LINGOWAY — Full App JS
    Persistence · Daily rotation · AI IA
 ═══════════════════════════════════ */
@@ -554,15 +559,33 @@ function buildLogin(){
   html('s-login',h);
 }
 
-function submitLogin(){
+async function submitLogin(){
   var em=$id('l-em').value.trim();var pw=$id('l-pw').value;
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){$id('lf-em').classList.add('err');return;}
   if(!pw){$id('lf-pw').classList.add('err');return;}
-  var saved=LS.g('profile');
-  if(saved&&saved.fn){Object.assign(U,saved);}
-  else{U.fn=em.split('@')[0];U.email=em;U.level='B1';U.levelName='Intermédiaire';U.score=68;U.certName='TOEFL iBT';U.certShort='TOEFL';U.motivName='la carrière';U.dailyTime=30;U.weakNames=['le conditionnel','la voix passive'];U.skillScores={Grammaire:68,Vocabulaire:55,Compréhension:62,Expression:50,Lecture:74,Écriture:44};U.targetName='anglais';U.streak=5;U.wordsLearned=120;}
-  U.weekPlan=buildWeekPlan();
-  launchApp();
+  if(!sb){
+    /* Fallback sans Supabase */
+    var saved=LS.g('profile');
+    if(saved&&saved.fn){Object.assign(U,saved);}
+    else{U.fn=em.split('@')[0];U.email=em;U.level='B1';U.levelName='Intermédiaire';U.score=68;U.certName='TOEFL iBT';U.certShort='TOEFL';U.motivName='la carrière';U.dailyTime=30;U.weakNames=['le conditionnel','la voix passive'];U.skillScores={Grammaire:68,Vocabulaire:55,Compréhension:62,Expression:50,Lecture:74,Écriture:44};U.targetName='anglais';U.streak=5;U.wordsLearned=120;}
+    U.weekPlan=buildWeekPlan();launchApp();return;
+  }
+  var btn=document.querySelector('#s-login .bform');
+  if(btn){btn.textContent='Connexion...';btn.disabled=true;}
+  try{
+    var res=await sb.auth.signInWithPassword({email:em,password:pw});
+    if(res.error){
+      if(btn){btn.textContent='Se connecter →';btn.disabled=false;}
+      $id('lf-pw').classList.add('err');
+      var em2=document.querySelector('#lf-pw .errmsg');if(em2)em2.textContent='Email ou mot de passe incorrect';
+      return;
+    }
+    await loadUserProfile(res.data.user.id);
+    launchApp();
+  }catch(e){
+    if(btn){btn.textContent='Se connecter →';btn.disabled=false;}
+    toast('Erreur de connexion. Réessayez.');
+  }
 }
 function loginDemo(){
   Object.assign(U,{fn:'Marie',ln:'Dupont',email:'demo@lingoway.app',target:'en',level:'B1',levelName:'Intermédiaire',score:72,streak:15,wordsLearned:247,certName:'TOEFL iBT',certShort:'TOEFL',motivName:'la carrière & le business',dailyTime:30,weakNames:['le conditionnel','la voix passive','la rédaction'],skillScores:{Grammaire:71,Vocabulaire:58,Compréhension:65,Expression:55,Lecture:78,Écriture:48},targetName:'anglais'});
@@ -588,7 +611,7 @@ function buildSignup(){
   html('s-signup',h);
 }
 
-function submitSignup(){
+async function submitSignup(){
   var fn=$id('i-fn').value.trim(),ln=$id('i-ln').value.trim(),em=$id('i-em').value.trim(),pw=$id('i-pw').value;
   var ok=true;
   if(!fn){$id('ff-fn').classList.add('err');ok=false;}
@@ -598,6 +621,22 @@ function submitSignup(){
   if(!ok)return;
   U.fn=fn;U.ln=ln;U.email=em;
   U.native=$id('i-native').value;U.target=$id('i-target').value;U.age=parseInt($id('i-age').value)||0;
+  if(sb){
+    var btn=document.querySelector('#s-signup .bform');
+    if(btn){btn.textContent='Création...';btn.disabled=true;}
+    try{
+      var res=await sb.auth.signUp({email:em,password:pw});
+      if(btn){btn.textContent='Continuer →';btn.disabled=false;}
+      if(res.error){toast('Erreur : '+res.error.message);return;}
+      if(res.data&&res.data.user){
+        U.userId=res.data.user.id;
+        await sb.from('profiles').update({first_name:fn,last_name:ln,target_lang:U.target,native_lang:U.native}).eq('id',res.data.user.id);
+      }
+    }catch(e){
+      if(btn){btn.textContent='Continuer →';btn.disabled=false;}
+      toast('Erreur de connexion. Vérifiez votre clé Supabase.');
+    }
+  }
   buildTestSteps();tStep=0;tElapsed=0;gramAnswered={};
   clearInterval(tTimer);
   tTimer=setInterval(function(){tElapsed++;var m=String(Math.floor(tElapsed/60)).padStart(2,'0'),s=String(tElapsed%60).padStart(2,'0');var el=$id('t-timer');if(el)el.textContent=m+':'+s;},1000);
@@ -722,6 +761,7 @@ function computeLevel(){
   U.skillScores={Grammaire:Math.round(Math.min(100,(gp*.6+(U.selfGrammar||3)/5*.4)*100)),Vocabulaire:Math.round(Math.min(100,(vp*.5+(U.selfListening||3)/5*.5)*100)),Compréhension:Math.round((U.selfListening||3)/5*100),Expression:Math.round((U.selfSpeaking||3)/5*100),Lecture:Math.round(Math.min(100,(rp*.5+(U.selfGrammar||3)/5*.5)*100)),Écriture:Math.round(Math.min(100,wp*100))};
   U.streak=1;U.wordsLearned=0;U.weekPlan=buildWeekPlan();
   LS.s('profile',U);
+  if(typeof saveUserProfile==='function')saveUserProfile();
 }
 function buildWeekPlan(){
   var wk=U.weakNames&&U.weakNames.length?U.weakNames.join(', '):'les fondamentaux';
@@ -1598,14 +1638,75 @@ function closeModal(){$id('modal').classList.remove('on');}
 function doConnect(){if(curModal){sentReqs[curModal.id]=true;buildNearby();}closeModal();toast('Demande envoyée !');}
 
 /* ═══ AUTO-INIT ═══ */
-(function init(){
-  buildLanding();
-  var saved=LS.g('profile');
-  if(saved&&saved.fn){
-    Object.assign(U,saved);
-    U.weekPlan=U.weekPlan||buildWeekPlan();
-    launchApp();
+
+/* ═══════════════════════════════════
+   SUPABASE AUTH FUNCTIONS
+═══════════════════════════════════ */
+
+async function loadUserProfile(userId){
+  if(!sb)return;
+  try{
+    var res=await sb.from('profiles').select('*').eq('id',userId).single();
+    if(res.data){
+      var d=res.data;
+      U.fn=d.first_name||'';U.ln=d.last_name||'';U.email=d.email||'';
+      U.target=d.target_lang||'en';U.native=d.native_lang||'fr';
+      U.level=d.level||'A1';U.levelName=d.level_name||'Débutant';
+      U.score=d.score||0;U.certName=d.cert_name||'TOEFL iBT';
+      U.certShort={'TOEFL iBT':'TOEFL','IELTS Academic':'IELTS','Cambridge B2':'B2','Cambridge C1':'C1','TOEIC':'TOEIC','usage libre':'Libre'}[U.certName]||'TOEFL';
+      U.dailyTime=d.daily_time||30;U.weakNames=d.weak_names||[];
+      U.skillScores=d.skill_scores||{Grammaire:50,Vocabulaire:50,Compréhension:50,Expression:50,Lecture:50,Écriture:50};
+      U.streak=d.streak||0;U.wordsLearned=d.words_learned||0;
+      U.userId=userId;U.weekPlan=buildWeekPlan();
+    }
+  }catch(e){console.log('loadUserProfile error:',e);}
+}
+
+async function saveUserProfile(){
+  if(!U.userId||!sb)return;
+  try{
+    await sb.from('profiles').update({
+      level:U.level,level_name:U.levelName,score:U.score,
+      cert_name:U.certName,daily_time:U.dailyTime,
+      weak_names:U.weakNames,skill_scores:U.skillScores,
+      streak:U.streak,words_learned:U.wordsLearned,
+      xp_total:getXP(),updated_at:new Date().toISOString()
+    }).eq('id',U.userId);
+  }catch(e){console.log('saveUserProfile error:',e);}
+}
+
+async function checkSession(){
+  if(!sb){buildLanding();return;}
+  try{
+    var res=await sb.auth.getSession();
+    if(res.data&&res.data.session){
+      await loadUserProfile(res.data.session.user.id);
+      U.weekPlan=buildWeekPlan();
+      launchApp();
+    }else{
+      var saved=LS.g('profile');
+      if(saved&&saved.fn){Object.assign(U,saved);U.weekPlan=U.weekPlan||buildWeekPlan();launchApp();}
+      else{buildLanding();}
+    }
+  }catch(e){
+    var saved=LS.g('profile');
+    if(saved&&saved.fn){Object.assign(U,saved);U.weekPlan=U.weekPlan||buildWeekPlan();launchApp();}
+    else{buildLanding();}
   }
+}
+
+async function logOut(){
+  if(sb){try{await sb.auth.signOut();}catch(e){}}
+  LS.d('profile');
+  U={fn:'',ln:'',email:'',target:'en',native:'fr',level:'B1',levelName:'Intermédiaire',score:0,
+    certName:'TOEFL iBT',certShort:'TOEFL',dailyTime:30,weakNames:[],
+    skillScores:{Grammaire:50,Vocabulaire:50,Compréhension:50,Expression:50,Lecture:50,Écriture:50},
+    streak:0,wordsLearned:0,weekPlan:[],motivation:0,motivName:'la carrière & le business',targetName:'anglais'};
+  buildLanding();go('s-land');
+}
+
+(function init(){
+  checkSession();
 })();
 
 /* ═══════════════════════════════════════
@@ -2017,7 +2118,7 @@ finishExam=function(){
       <button class="bts" style="flex:1;" onclick="closeProfModal()">Fermer</button>
     </div>
     <div style="text-align:center;margin-top:14px;">
-      <button onclick="resetApp()" style="font-size:11px;color:var(--rd);background:none;border:none;cursor:pointer;font-family:inherit;">Réinitialiser le profil</button>
+      <button onclick="logOut()" style="font-size:12px;color:var(--b3);background:none;border:none;cursor:pointer;font-family:inherit;font-weight:700;display:block;margin-bottom:8px;">Se déconnecter</button><button onclick="resetApp()" style="font-size:11px;color:var(--rd);background:none;border:none;cursor:pointer;font-family:inherit;">Réinitialiser le profil</button>
     </div>
   </div>
 </div>
