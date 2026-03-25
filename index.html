@@ -474,6 +474,8 @@ var SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 var sb = null;
 var supabaseReady = false;
 var supabaseError = null;
+var lastSignupAttempt = 0; // throttle signup
+var signupInProgress = false;
 
 // Attendre que Supabase soit chargé
 function initSupabase(){
@@ -601,13 +603,27 @@ function buildLogin(){
   h+='<div class="ltip"><div class="ltav">★</div><div class="ltt"><strong>L\'IA vous reconnaît.</strong> Votre programme, vos scores et votre progression vous attendent là où vous vous êtes arrêté.</div></div>';
   h+='<div class="fd" id="lf-em"><label>Email</label><input type="email" id="l-em" placeholder="vous@exemple.fr" oninput="clearErr(\'lf-em\')"/><div class="errmsg">Email invalide</div></div>';
   h+='<div class="fd" id="lf-pw"><label>Mot de passe</label><div class="pw"><input type="password" id="l-pw" placeholder="Votre mot de passe" oninput="clearErr(\'lf-pw\')"/><button class="eye" onclick="togglePwd(\'l-pw\',this)" type="button">👁</button></div><div class="errmsg">Incorrect</div></div>';
-  h+='<a class="forgot" onclick="toast(\'Email de réinitialisation envoyé !\')">Mot de passe oublié ?</a>';
+  h+='<a class="forgot" onclick="resetPassword()">Mot de passe oublié ?</a>';
   h+='<button class="bform" style="margin-top:12px;" onclick="submitLogin()">Se connecter →</button>';
   h+='<div class="sep">ou</div>';
   h+='<button class="bdemo" onclick="loginDemo()">⚡ Accéder au compte démo</button>';
   h+='<div class="swla">Pas encore de compte ? <a onclick="buildSignup();go(\'s-signup\')">Créer un compte</a></div>';
   h+='</div></div>';
   html('s-login',h);
+}
+
+async function resetPassword(){
+  var em=$id('l-em')?$id('l-em').value.trim():'';
+  if(!em||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){
+    toast('Entrez votre email d\'abord, puis cliquez sur "Mot de passe oublié".');
+    if($id('lf-em'))$id('lf-em').classList.add('err');
+    return;
+  }
+  try{
+    const client=await waitForSupabase();
+    await client.auth.resetPasswordForEmail(em,{redirectTo:window.location.origin});
+    toast('Email de réinitialisation envoyé à '+em+' !');
+  }catch(e){toast('Erreur lors de l\'envoi. Réessayez.');}
 }
 
 async function submitLogin(){
@@ -661,38 +677,71 @@ function buildSignup(){
 }
 
 async function submitSignup(){
+  // Throttle strict: 5s minimum entre tentatives
+  if(signupInProgress){
+    toast('Création en cours... Veuillez patienter.');
+    return;
+  }
+  var now = Date.now();
+  if(now - lastSignupAttempt < 5000){
+    var remaining = Math.ceil((5000 - (now - lastSignupAttempt)) / 1000);
+    toast('Attendez ' + remaining + ' secondes avant de réessayer.');
+    return;
+  }
+
   var fn=$id('i-fn').value.trim(),ln=$id('i-ln').value.trim(),em=$id('i-em').value.trim(),pw=$id('i-pw').value;
   var ok=true;
   if(!fn){$id('ff-fn').classList.add('err');ok=false;}
   if(!ln){$id('ff-ln').classList.add('err');ok=false;}
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){$id('ff-em').classList.add('err');ok=false;}
   if(pw.length<8){$id('ff-pw').classList.add('err');ok=false;}
-  if(!ok)return;
+  if(!ok){toast('Veuillez remplir correctement le formulaire');return;}
+
+  lastSignupAttempt = Date.now();
+  signupInProgress = true;
+
   U.fn=fn;U.ln=ln;U.email=em;
   U.native=$id('i-native').value;U.target=$id('i-target').value;U.age=parseInt($id('i-age').value)||0;
-  
+
   var btn=document.querySelector('#s-signup .bform');
   if(btn){btn.textContent='Création...';btn.disabled=true;}
   try{
-    // Attendre que Supabase soit prêt
     const client = await waitForSupabase();
-    var res=await client.auth.signUp({email:em,password:pw});
+    console.log('[DEBUG] tentative signup:', em);
+    var res = await client.auth.signUp({email:em,password:pw});
+    console.log('[DEBUG] signup response', res);
     if(btn){btn.textContent='Continuer →';btn.disabled=false;}
-    if(res.error){toast('Erreur : '+res.error.message);return;}
-    if(res.data&&res.data.user){
-      U.userId=res.data.user.id;
-      await client.from('profiles').update({first_name:fn,last_name:ln,target_lang:U.target,native_lang:U.native}).eq('id',res.data.user.id);
+
+    if(res.error){
+      var msg = res.error.message || 'Erreur';
+      if(msg.toLowerCase().includes('duplicate')) msg = 'Cet email existe déjà.';
+      if(msg.toLowerCase().includes('password')) msg = 'Mot de passe invalide (8+ caractères).';
+      if(msg.toLowerCase().includes('429')||msg.toLowerCase().includes('too many')) msg = 'Trop de tentatives. Attendez 60 secondes.';
+      toast(msg);
+      signupInProgress = false;
+      return;
     }
+
+    if(res.data && res.data.user){
+      U.userId = res.data.user.id;
+      try{
+        await client.from('profiles').upsert({id:U.userId,first_name:fn,last_name:ln,email:U.email,target_lang:U.target,native_lang:U.native});
+      }catch(e){console.error('[DEBUG] upsert error', e);}
+    }
+    
+    signupInProgress = false;
+    buildTestSteps();tStep=0;tElapsed=0;gramAnswered={};
+    clearInterval(tTimer);
+    tTimer=setInterval(function(){tElapsed++;var m=String(Math.floor(tElapsed/60)).padStart(2,'0'),s=String(tElapsed%60).padStart(2,'0');var el=$id('t-timer');if(el)el.textContent=m+':'+s;},1000);
+    go('s-test');renderTStep();
   }catch(e){
+    console.error('[DEBUG] submitSignup catch', e);
     if(btn){btn.textContent='Continuer →';btn.disabled=false;}
-    toast('Erreur de création. Réessayez.');
-    console.error(e);
+    toast('Erreur réseau ou Supabase.');
+    signupInProgress = false;
   }
-  buildTestSteps();tStep=0;tElapsed=0;gramAnswered={};
-  clearInterval(tTimer);
-  tTimer=setInterval(function(){tElapsed++;var m=String(Math.floor(tElapsed/60)).padStart(2,'0'),s=String(tElapsed%60).padStart(2,'0');var el=$id('t-timer');if(el)el.textContent=m+':'+s;},1000);
-  go('s-test');renderTStep();
 }
+
 
 /* ═══ TEST ENGINE ═══ */
 function buildTestSteps(){
@@ -883,6 +932,7 @@ function buildAppShell(){
   h+='<div id="m-community" class="asc">';
   h+='<div class="grt">Rencontrez des locuteurs natifs</div>';
   h+='<div class="grtsub" style="margin-bottom:14px;">L\'IA trouve des partenaires près de chez vous</div>';
+  h+='<div style="background:var(--yb);border:1px solid var(--yw);border-radius:12px;padding:10px 14px;font-size:11px;color:var(--yw);font-weight:600;margin-bottom:14px;">⚠️ Fonctionnalité en bêta — Profils de démonstration uniquement. La communauté réelle arrive bientôt !</div>';
   h+='<div class="aitip"><div class="aitipav">★</div><div class="aitiptxt" id="ctip"><strong>Recommandation IA :</strong> Sofia F. (🇵🇹 natif) habite à 2,3 km et cherche à pratiquer votre langue. Échangez !</div></div>';
   h+='<div class="mapw"><svg width="100%" height="100%" viewBox="0 0 680 230" preserveAspectRatio="xMidYMid slice"><rect width="680" height="230" fill="#dce8f5"/><path d="M0 115 Q170 95 340 110 Q510 125 680 105" stroke="#fff" stroke-width="8" fill="none"/><path d="M195 0 Q205 57 210 115 Q215 172 220 230" stroke="#fff" stroke-width="6" fill="none"/><path d="M405 0 Q415 72 420 115 Q425 168 430 230" stroke="#fff" stroke-width="5" fill="none"/><rect x="55" y="52" width="40" height="26" rx="4" fill="#b5cee0" opacity=".7"/><rect x="232" y="42" width="36" height="24" rx="3" fill="#b5cee0" opacity=".65"/><rect x="466" y="56" width="43" height="28" rx="4" fill="#b5cee0" opacity=".65"/><rect x="95" y="155" width="38" height="26" rx="3" fill="#b5cee0" opacity=".6"/><rect x="368" y="160" width="44" height="30" rx="4" fill="#b5cee0" opacity=".65"/><text x="330" y="218" text-anchor="middle" font-size="10" fill="#5a7ea0" font-weight="700" font-family="Plus Jakarta Sans,sans-serif">Ugine</text><text x="125" y="138" text-anchor="middle" font-size="9" fill="#5a7ea0" font-family="Plus Jakarta Sans,sans-serif">Albertville</text><text x="495" y="132" text-anchor="middle" font-size="9" fill="#5a7ea0" font-family="Plus Jakarta Sans,sans-serif">Grenoble</text></svg>';
   h+='<div class="pin" style="top:43%;left:47%;"><div class="pulse"></div><div class="pinc pinme" style="font-size:9px;font-weight:800;">Moi</div></div>';
@@ -1708,6 +1758,9 @@ async function loadUserProfile(userId){
       U.dailyTime=d.daily_time||30;U.weakNames=d.weak_names||[];
       U.skillScores=d.skill_scores||{Grammaire:50,Vocabulaire:50,Compréhension:50,Expression:50,Lecture:50,Écriture:50};
       U.streak=d.streak||0;U.wordsLearned=d.words_learned||0;
+      if(d.xp_total)LS.s('xp_total',d.xp_total);
+      var _ln={en:'anglais',es:'espagnol',de:'allemand',it:'italien',pt:'portugais',zh:'mandarin',ja:'japonais',ko:'coréen',ar:'arabe',ru:'russe',nl:'néerlandais',sv:'suédois',tr:'turc',hi:'hindi'};
+      U.targetName=_ln[U.target]||'anglais';
       U.userId=userId;U.weekPlan=buildWeekPlan();
     }
   }catch(e){console.log('loadUserProfile error:',e);}
@@ -1798,6 +1851,7 @@ function checkAndUpdateStreak(){
   U.streak=U.streak||1;
   LS.s('last_day',TODAY);
   LS.s('profile',U);
+  saveUserProfile();
 }
 function checkDailyComplete(){
   var keys=['grammar','vocab','reading','conversation'];
@@ -1818,6 +1872,7 @@ markDone=function(key){
   setTimeout(updateXPBar,400);
   checkDailyComplete();
   var sv=$id('s-str');if(sv)sv.textContent=(U.streak||1)+'j';
+  saveUserProfile();
 };
 
 /* ── MOT DU JOUR ── */
@@ -1895,6 +1950,7 @@ function saveProfModal(){
   var lp=$id('app-lvl');if(lp)lp.textContent=U.level+' · '+U.levelName;
   var ls=$id('app-lang');if(ls)for(var i=0;i<ls.options.length;i++)if(ls.options[i].value===U.target){ls.selectedIndex=i;break;}
   var ts=$id('s-time');if(ts)ts.textContent='Obj: '+U.dailyTime+"'/j";
+  saveUserProfile();
   closeProfModal();toast('Profil sauvegardé !');
 }
 function resetApp(){if(!confirm('Réinitialiser votre profil ? Toutes vos données seront effacées.'))return;localStorage.clear();location.reload();}
@@ -2139,7 +2195,7 @@ finishExam=function(){
   setTimeout(function(){
     var last=LS.g('last_exam');
     if(last){var hist=LS.g('exam_history')||[];hist.push(last);if(hist.length>20)hist=hist.slice(-20);LS.s('exam_history',hist);}
-    addXP('exam');setTimeout(updateXPBar,400);
+    addXP('exam');setTimeout(updateXPBar,400);saveUserProfile();
   },600);
 };
 
