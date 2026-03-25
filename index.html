@@ -1761,6 +1761,13 @@ async function loadUserProfile(userId){
       if(d.xp_total)LS.s('xp_total',d.xp_total);
       var _ln={en:'anglais',es:'espagnol',de:'allemand',it:'italien',pt:'portugais',zh:'mandarin',ja:'japonais',ko:'coréen',ar:'arabe',ru:'russe',nl:'néerlandais',sv:'suédois',tr:'turc',hi:'hindi'};
       U.targetName=_ln[U.target]||'anglais';
+      U.motivation=d.motivation||0;
+      var _ml=['la carrière & le business','les études académiques','l\'expatriation','les voyages','les médias & la culture','la curiosité personnelle'];
+      U.motivName=_ml[U.motivation];
+      if(d.daily_done&&d.daily_done.date===TODAY){
+        var _dd=Object.assign({},d.daily_done);delete _dd.date;
+        dailyDone=_dd;LS.s('dd_'+TODAY,dailyDone);
+      }
       U.userId=userId;U.weekPlan=buildWeekPlan();
     }
   }catch(e){console.log('loadUserProfile error:',e);}
@@ -1775,7 +1782,9 @@ async function saveUserProfile(){
       cert_name:U.certName,daily_time:U.dailyTime,
       weak_names:U.weakNames,skill_scores:U.skillScores,
       streak:U.streak,words_learned:U.wordsLearned,
-      xp_total:getXP(),updated_at:new Date().toISOString()
+      xp_total:getXP(),motivation:U.motivation||0,
+      daily_done:Object.assign({date:TODAY},dailyDone),
+      updated_at:new Date().toISOString()
     }).eq('id',U.userId);
   }catch(e){console.log('saveUserProfile error:',e);}
 }

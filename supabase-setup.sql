@@ -16,9 +16,15 @@ CREATE TABLE IF NOT EXISTS profiles (
   streak INTEGER DEFAULT 0,
   words_learned INTEGER DEFAULT 0,
   xp_total INTEGER DEFAULT 0,
+  motivation INTEGER DEFAULT 0,
+  daily_done JSONB DEFAULT '{}',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Ajouter les colonnes si elles n'existent pas (pour les bases existantes)
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS motivation INTEGER DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS daily_done JSONB DEFAULT '{}';
 
 -- Activer RLS (Row Level Security)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
